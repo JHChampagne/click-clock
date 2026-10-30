@@ -94,8 +94,52 @@ namespace DualClock
 
             LifecycleTests(root);
             HistoryFeatureTests(root);
+            GoalTests(root);
             if (args.Contains("--layout")) LayoutTests(root);
             Console.WriteLine("ALL PASSED: " + passed);
+        }
+
+        private static void GoalTests(string root)
+        {
+            var clock = new FakeClock {UtcNow=new DateTime(2026,10,30,23,59,30,DateTimeKind.Utc)};
+            var state = new AppState(); var engine = new ClockEngine(state,clock,TimeZoneInfo.Utc);
+            var store = new StateStore(Path.Combine(root,"goals"));
+            Check(!engine.GoalReached && state.GoalTicks==0,"Old and new states default to no goal");
+            engine.SetGoal(TimeSpan.TicksPerMinute,store.Save);
+            Check(store.Load().GoalTicks==TimeSpan.TicksPerMinute && !state.Started,"Goal saves immediately without starting timer");
+            engine.Switch(); clock.Advance(59); engine.Tick(); Check(!engine.GoalReached,"Goal not reached before exact boundary");
+            clock.Advance(1); engine.Tick(); Check(engine.GoalReached && state.Days.Count==2,"Goal reached at boundary across midnight");
+            engine.Switch(); clock.Advance(120); engine.Tick(); Check(engine.GoalReached && state.StudyTicks==TimeSpan.TicksPerMinute,"Rest preserves achieved goal without learning progress");
+            engine.DeleteDay(engine.Today,store.Save); Check(engine.GoalReached,"Deleting daily history leaves goal intact");
+            store.Save(state); var loaded=store.Load();
+            Check(new ClockEngine(loaded,clock,TimeZoneInfo.Utc).GoalReached,"Restart restores goal celebration");
+            engine.SetGoal(TimeSpan.TicksPerMinute*2,store.Save); Check(!engine.GoalReached,"Raising goal stops celebration");
+            engine.SetGoal(TimeSpan.TicksPerMinute,store.Save); Check(engine.GoalReached,"Setting already reached goal celebrates immediately");
+            long count=state.Days.Sum(d=>d.SwitchCount);
+            engine.Suspend(); clock.Advance(3600); engine.Resume();
+            Check(engine.GoalReached && count==state.Days.Sum(d=>d.SwitchCount),"Sleep recovery preserves goal without extra switches");
+            engine.Reset(); Check(!engine.GoalReached && state.GoalTicks==TimeSpan.TicksPerMinute,"Reset clears progress but retains goal");
+            engine.Switch(); clock.Advance(60); engine.Tick(); Check(engine.GoalReached,"Retained goal can be reached after reset");
+            engine.SetGoal(0,store.Save); Check(!engine.GoalReached && store.Load().GoalTicks==0,"Clear goal disables and saves celebration");
+            engine.SetGoal(ClockEngine.MaximumGoalTicks,store.Save); Check(store.Load().GoalTicks==TimeSpan.FromMinutes(59999).Ticks,"Maximum goal supported");
+            foreach (long invalid in new[] {-1L,1L,ClockEngine.MaximumGoalTicks+TimeSpan.TicksPerMinute})
+            {
+                bool rejected=false; try {engine.SetGoal(invalid,store.Save);} catch(ArgumentOutOfRangeException) {rejected=true;}
+                Check(rejected && state.GoalTicks==ClockEngine.MaximumGoalTicks,"Invalid goal rejected without modification " + invalid);
+            }
+            using (var locked=new FileStream(store.FilePath,FileMode.Open,FileAccess.Read,FileShare.Read))
+            {
+                bool failed=false; try {engine.SetGoal(TimeSpan.TicksPerMinute,store.Save);} catch(IOException) {failed=true;}
+                Check(failed && state.GoalTicks==ClockEngine.MaximumGoalTicks,"Failed goal save restores previous target");
+            }
+            Check(store.Load().GoalTicks==ClockEngine.MaximumGoalTicks,"Failed goal save preserves disk state");
+            Check(ClockEngine.FormatTime(new DateTime(2026,10,30,0,0,0))=="00:00" &&
+                ClockEngine.FormatTime(new DateTime(2026,10,30,23,59,59))=="23:59","Clock uses fixed 24-hour format at midnight");
+            Check(ClockEngine.FormatTime(new DateTime(2026,10,30,13,5,0))=="13:05","Clock preserves minute zero padding");
+            string xml=File.ReadAllText(store.FilePath);
+            File.WriteAllText(store.FilePath,xml.Replace("<GoalTicks>"+ClockEngine.MaximumGoalTicks+"</GoalTicks>","<GoalTicks>-1</GoalTicks>"));
+            var recovery=new StateStore(Path.Combine(root,"goals"));
+            Check(recovery.Load().GoalTicks>=0 && recovery.RecoveryMessage!=null,"Invalid saved goal triggers backup recovery");
         }
 
         private static void LifecycleTests(string root)
@@ -254,10 +298,13 @@ namespace DualClock
                 form.Size = new Size(size.Width*dpi/96,size.Height*dpi/96);
                 typeof(ClockForm).GetMethod("LayoutContents",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(form,null);
                 var buttons = form.Controls.OfType<SoftButton>().ToList();
-                Check(buttons.Count==7 && !buttons.Any(b=>b.Text=="暂停" || b.Text=="继续"),
+                Check(buttons.Count==8 && !buttons.Any(b=>b.Text=="暂停" || b.Text=="继续"),
                     "No manual pause control " + size + " DPI " + dpi);
                 Check(form.Controls.Cast<Control>().All(c=>form.ClientRectangle.Contains(c.Bounds)),"Bounds " + size + " DPI " + dpi);
                 Check(buttons.All(a=>buttons.All(b=>a==b || !a.Bounds.IntersectsWith(b.Bounds))),"Buttons do not overlap " + size + " DPI " + dpi);
+                var clockDisplay=form.Controls.OfType<SegmentDisplay>().Single(c=>c.AccessibleName.StartsWith("当前时间"));
+                Check(!buttons.Any(b=>b.Bounds.IntersectsWith(clockDisplay.Bounds)) &&
+                    !form.Controls.OfType<Label>().Any(l=>l.Text.Contains("空格切换")),"Clock fits and permanent footer removed " + size + " DPI " + dpi);
                 var brand=form.Controls.OfType<Label>().Single(l=>l.Text==Branding.Name);
                 Check(form.Text==Branding.Name && TextRenderer.MeasureText(brand.Text,brand.Font).Width<=brand.ClientSize.Width,
                     "Click Clock branding fits " + size + " DPI " + dpi);
@@ -295,6 +342,7 @@ namespace DualClock
                 form.Close();
             }
             HistoryLayoutTests(root);
+            GoalLayoutTests(root);
             using (var form = new ClockForm(new StateStore(Path.Combine(root,"counter-ui"))))
             {
                 form.Show(); Application.DoEvents();
@@ -315,6 +363,87 @@ namespace DualClock
                 var liveEngine=(ClockEngine)typeof(ClockForm).GetField("engine",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(form);
                 Check(liveEngine.Running && liveEngine.State.Selected==1 && liveEngine.State.Days.Sum(d=>d.SwitchCount)==3,
                     "Reopened UI automatically resumes saved rest side without extra switch");
+                form.Close();
+            }
+        }
+
+        private static void GoalLayoutTests(string root)
+        {
+            foreach (int dpi in new[] {96,120,144})
+            using (var dialog=new GoalForm(0,TimeSpan.FromMinutes(12).Ticks,dpi))
+            {
+                dialog.Show(); Application.DoEvents();
+                Check(dialog.Controls.Cast<Control>().All(c=>dialog.ClientRectangle.Contains(c.Bounds)),"Goal dialog bounds DPI " + dpi);
+                var inputs=dialog.Controls.OfType<NumericUpDown>().ToList();
+                var hours=inputs.Single(c=>c.AccessibleName=="目标小时");
+                var minutes=inputs.Single(c=>c.AccessibleName=="目标分钟");
+                Check(hours.Value==1 && minutes.Value==0,"Goal dialog defaults to one hour DPI " + dpi);
+                hours.Value=0;
+                dialog.Controls.OfType<SoftButton>().Single(b=>b.Text=="保存").PerformClick();
+                Check(dialog.DialogResult!=DialogResult.OK,"Zero target stays open for correction DPI " + dpi);
+                minutes.Value=1;
+                using (var bitmap=new Bitmap(dialog.Width,dialog.Height))
+                {
+                    dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));
+                    bitmap.Save(Path.Combine(root,"goal-dialog-"+dpi+".png"));
+                }
+                dialog.Controls.OfType<SoftButton>().Single(b=>b.Text=="保存").PerformClick();
+                Check(dialog.GoalTicks==TimeSpan.TicksPerMinute && dialog.DialogResult==DialogResult.OK,"Goal dialog accepts minimum DPI " + dpi);
+                dialog.Close();
+            }
+            using (var dialog=new GoalForm(TimeSpan.TicksPerHour,0,96))
+            {
+                dialog.Show(); dialog.Controls.OfType<SoftButton>().Single(b=>b.Text=="取消").PerformClick();
+                Check(dialog.DialogResult==DialogResult.Cancel,"Goal cancel does not request save"); dialog.Close();
+            }
+            using (var dialog=new GoalForm(TimeSpan.TicksPerHour,0,96))
+            {
+                dialog.Show(); dialog.Controls.OfType<SoftButton>().Single(b=>b.Text=="清除目标").PerformClick();
+                Check(dialog.DialogResult==DialogResult.OK && dialog.GoalTicks==0,"Goal clear explicitly disables target"); dialog.Close();
+            }
+            var store=new StateStore(Path.Combine(root,"fireworks-ui"));
+            store.Save(new AppState {Started=true,Selected=1,StudyTicks=TimeSpan.TicksPerMinute,GoalTicks=TimeSpan.TicksPerMinute});
+            using (var form=new ClockForm(store))
+            {
+                form.Show(); Application.DoEvents();
+                var animation=(System.Windows.Forms.Timer)typeof(ClockForm).GetField("animation",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(form);
+                var elapsed=(System.Diagnostics.Stopwatch)typeof(ClockForm).GetField("animationTime",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(form);
+                Check(animation.Enabled && elapsed.IsRunning,"Achieved goal loops when reopened on rest side");
+                using(var background=new Bitmap(form.Width,form.Height))
+                using(var graphics=Graphics.FromImage(background))
+                {
+                    FireworksScene.Draw(graphics,background.Size,2.1);
+                    background.Save(Path.Combine(root,"fireworks-scene.png"));
+                    var backdrop=typeof(ClockForm).GetField("backdrop",BindingFlags.Instance|BindingFlags.NonPublic);
+                    var previous=(Bitmap)backdrop.GetValue(form); if(previous!=null) previous.Dispose();
+                    backdrop.SetValue(form,background.Clone());
+                    var display=form.Controls.OfType<SegmentDisplay>().First();
+                    using(var tile=new Bitmap(display.Width,display.Height))
+                    using(var tileGraphics=Graphics.FromImage(tile))
+                    {
+                        SharedBackground.Draw(display,tileGraphics);
+                        Check(tile.GetPixel(0,0)==background.GetPixel(display.Left,display.Top),"Child controls use exact shared background coordinates");
+                    }
+                    using(var composite=new Bitmap(form.Width,form.Height))
+                    {
+                        form.DrawToBitmap(composite,new Rectangle(Point.Empty,composite.Size));
+                        composite.Save(Path.Combine(root,"goal-achieved.png"));
+                    }
+                    FireworksScene.Draw(graphics,background.Size,8.2);
+                    background.Save(Path.Combine(root,"fireworks-next-cycle.png"));
+                }
+                var power=typeof(ClockForm).GetMethod("PowerChanged",BindingFlags.Instance|BindingFlags.NonPublic);
+                power.Invoke(form,new object[]{null,new PowerModeChangedEventArgs(PowerModes.Suspend)});
+                Check(!animation.Enabled && !elapsed.IsRunning,"Suspend stops animation rendering");
+                power.Invoke(form,new object[]{null,new PowerModeChangedEventArgs(PowerModes.Resume)});
+                Check(animation.Enabled,"Resume restores goal celebration");
+                form.WindowState=FormWindowState.Minimized; Application.DoEvents();
+                Check(!animation.Enabled,"Minimizing stops animation rendering");
+                form.WindowState=FormWindowState.Normal; Application.DoEvents();
+                Check(animation.Enabled,"Restoring window resumes animation rendering");
+                var engine=(ClockEngine)typeof(ClockForm).GetField("engine",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(form);
+                engine.Reset(); typeof(ClockForm).GetMethod("UpdateDisplay",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(form,null);
+                Check(!animation.Enabled && !elapsed.IsRunning && engine.State.GoalTicks>0,"Reset stops animation while retaining goal");
                 form.Close();
             }
         }

@@ -47,6 +47,7 @@ namespace DualClock
         public int Version = 2;
         public long StudyTicks;
         public long RestTicks;
+        public long GoalTicks;
         public int Selected;
         public bool Started;
         public bool Pinned;
@@ -63,6 +64,8 @@ namespace DualClock
         private long anchor;
         public readonly AppState State;
         public bool Running { get; private set; }
+        public const long MaximumGoalTicks = 59999L * TimeSpan.TicksPerMinute;
+        public bool GoalReached { get { return State.GoalTicks > 0 && State.StudyTicks >= State.GoalTicks; } }
         public string Today { get { return TimeZoneInfo.ConvertTimeFromUtc(clock.UtcNow, zone).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); } }
 
         public ClockEngine(AppState state, IClock clock, TimeZoneInfo zone)
@@ -161,6 +164,23 @@ namespace DualClock
             Running = true;
         }
 
+        public void SetGoal(long ticks, Action<AppState> persist)
+        {
+            if (ticks < 0 || ticks > MaximumGoalTicks || ticks % TimeSpan.TicksPerMinute != 0)
+                throw new ArgumentOutOfRangeException("ticks");
+            if (persist == null) throw new ArgumentNullException("persist");
+            Tick();
+            long previous = State.GoalTicks;
+            State.GoalTicks = ticks;
+            try { persist(State); }
+            catch { State.GoalTicks = previous; throw; }
+        }
+
+        public static string FormatTime(DateTime localTime)
+        {
+            return localTime.ToString("HH:mm", CultureInfo.InvariantCulture);
+        }
+
         public void Suspend()
         {
             Tick();
@@ -210,7 +230,8 @@ namespace DualClock
             {
                 AppState state = (AppState)Serializer.Deserialize(reader);
                 if ((state.Version != 1 && state.Version != 2) || state.StudyTicks < 0 || state.RestTicks < 0 ||
-                    state.Selected < 0 || state.Selected > 1 || state.Days == null)
+                    state.Selected < 0 || state.Selected > 1 || state.Days == null || state.GoalTicks < 0 ||
+                    state.GoalTicks > ClockEngine.MaximumGoalTicks || state.GoalTicks % TimeSpan.TicksPerMinute != 0)
                     throw new InvalidDataException("Invalid state");
                 var dates = new HashSet<string>();
                 foreach (DayRecord day in state.Days)

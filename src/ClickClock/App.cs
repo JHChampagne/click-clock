@@ -94,7 +94,7 @@ namespace DualClock
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
-            g.Clear(Palette.Background);
+            SharedBackground.Draw(this, g);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             Color fill = Primary ? (pressed ? Color.FromArgb(190, 193, 198) : hover ? Color.White : Palette.Foreground)
                 : Lit ? Color.FromArgb(46, 49, 55) : hover ? Color.FromArgb(32, 35, 40) :
@@ -168,7 +168,7 @@ namespace DualClock
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
-            g.Clear(Palette.Background);
+            SharedBackground.Draw(this, g);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             float units = value.Sum(c => c == ':' ? 0.25f : 0.66f) - 0.08f;
             float h = Math.Min(Height - 2, (Width - 4) / units);
@@ -227,8 +227,12 @@ namespace DualClock
         private readonly ToolTip tips = new ToolTip();
         private readonly Label brand = new Label(), studyLabel = new Label(), restLabel = new Label();
         private readonly Label studyStatus = new Label(), restStatus = new Label(), footer = new Label();
-        private readonly SegmentDisplay study = new SegmentDisplay(), rest = new SegmentDisplay();
-        private readonly SoftButton main = new SoftButton(), reset = new SoftButton(), history = new SoftButton();
+        private readonly SegmentDisplay study = new SegmentDisplay(), rest = new SegmentDisplay(), wallClock = new SegmentDisplay();
+        private readonly SoftButton main = new SoftButton(), reset = new SoftButton(), goal = new SoftButton(), history = new SoftButton();
+        private readonly System.Windows.Forms.Timer animation = new System.Windows.Forms.Timer();
+        private readonly System.Diagnostics.Stopwatch animationTime = new System.Diagnostics.Stopwatch();
+        private Bitmap backdrop;
+        private bool systemSuspended;
         private readonly SoftButton pin = new SoftButton(), min = new SoftButton(), full = new SoftButton(), close = new SoftButton();
         private bool ready, fullscreen, closing, saveError;
         private int dpi = 96;
@@ -257,7 +261,7 @@ namespace DualClock
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             foreach (Label label in new[] { brand, studyLabel, restLabel, studyStatus, restStatus, footer })
             {
-                label.BackColor = Palette.Background;
+                label.BackColor = Color.Transparent;
                 label.ForeColor = Palette.Muted;
                 label.TextAlign = ContentAlignment.MiddleCenter;
                 Controls.Add(label);
@@ -267,13 +271,14 @@ namespace DualClock
             brand.TextAlign = ContentAlignment.MiddleLeft;
             studyLabel.Text = "学习 / 工作";
             restLabel.Text = "休息 / 娱乐";
-            Controls.Add(study); Controls.Add(rest);
+            Controls.Add(study); Controls.Add(rest); Controls.Add(wallClock);
+            wallClock.Enabled = false; // Keep the top bar draggable through the small clock.
             main.Primary = true;
             main.AccessibleName = "开始学习或切换计时";
-            reset.Text = "重置"; history.Text = "历史";
-            foreach (SoftButton button in new[] { main, reset, history, pin, min, full, close }) Controls.Add(button);
-            main.TabIndex = 0; reset.TabIndex = 1; history.TabIndex = 2;
-            pin.TabIndex = 3; min.TabIndex = 4; full.TabIndex = 5; close.TabIndex = 6;
+            reset.Text = "重置"; goal.Text = "目标"; history.Text = "历史";
+            foreach (SoftButton button in new[] { main, reset, goal, history, pin, min, full, close }) Controls.Add(button);
+            main.TabIndex = 0; reset.TabIndex = 1; goal.TabIndex = 2; history.TabIndex = 3;
+            pin.TabIndex = 4; min.TabIndex = 5; full.TabIndex = 6; close.TabIndex = 7;
             SetupIcon(pin, "pin", "置顶", "保持显示在其他普通窗口上方");
             SetupIcon(min, "min", "最小化", "最小化，继续计时");
             SetupIcon(full, "full", "全屏", "全屏 / 还原 · F11");
@@ -282,6 +287,7 @@ namespace DualClock
             tips.SetToolTip(reset, "清零本次累计，保留每日历史");
             main.Click += delegate { engine.Switch(); Changed(); };
             reset.Click += delegate { ConfirmReset(); };
+            goal.Click += delegate { ShowGoal(); };
             history.Click += delegate { ShowHistory(); };
             pin.Click += delegate
             {
@@ -293,6 +299,8 @@ namespace DualClock
             full.Click += delegate { ToggleFullscreen(); };
             close.Click += delegate { Close(); };
             timer.Interval = 100;
+            animation.Interval = 33;
+            animation.Tick += delegate { RenderBackdrop(); };
             timer.Tick += delegate
             {
                 engine.Tick();
@@ -321,7 +329,9 @@ namespace DualClock
             {
                 if (ready && !fullscreen && WindowState == FormWindowState.Normal) normalBounds = Bounds;
                 LayoutContents();
+                UpdateAnimation();
             };
+            VisibleChanged += delegate { if (ready) UpdateAnimation(); };
         }
 
         private void SetupIcon(SoftButton button, string glyph, string name, string tip)
@@ -370,6 +380,7 @@ namespace DualClock
             float statusY = digitY + digitHeight + 10;
             float center = w / 2f;
             Place(brand, 19, 8, 135, 24);
+            Place(wallClock, center - 31, 9, 62, 22);
             Place(pin, w - 132, 6, 28, 28);
             Place(min, w - 102, 6, 28, 28);
             Place(full, w - 72, 6, 28, 28);
@@ -393,7 +404,8 @@ namespace DualClock
                 bottom = h - 61;
             }
             Place(main, center - bw/2, bottom, bw, bh);
-            Place(reset, 20, bottom + (bh-32)/2, 56, 32);
+            Place(reset, 20, bottom + (bh-32)/2, 44, 32);
+            Place(goal, 70, bottom + (bh-32)/2, 44, 32);
             Place(history, w-76, bottom + (bh-32)/2, 56, 32);
             Place(footer, 12, h - 19, w - 24, 14);
             SetFont(brand, 10, FontStyle.Bold);
@@ -401,7 +413,7 @@ namespace DualClock
             SetFont(restLabel, Math.Min(13, 10*bodyScale), FontStyle.Regular);
             SetFont(studyStatus, 8, FontStyle.Regular); SetFont(restStatus, 8, FontStyle.Regular);
             SetFont(footer, 7, FontStyle.Regular);
-            foreach (SoftButton button in new[] { main, reset, history, pin, min, full, close })
+            foreach (SoftButton button in new[] { main, reset, goal, history, pin, min, full, close })
             {
                 button.ScaleFactor = s;
                 SetFont(button, button == main ? 10 : 8.5f, button == main ? FontStyle.Bold : FontStyle.Regular);
@@ -424,6 +436,39 @@ namespace DualClock
             if (owned) old.Dispose();
         }
 
+        internal void DrawBackdrop(Graphics graphics, Point origin)
+        {
+            graphics.Clear(Palette.Background);
+            if (backdrop != null && backdrop.Size == ClientSize)
+                graphics.DrawImageUnscaled(backdrop, -origin.X, -origin.Y);
+        }
+        protected override void OnPaintBackground(PaintEventArgs e) { DrawBackdrop(e.Graphics, Point.Empty); }
+        private void RenderBackdrop()
+        {
+            if (ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
+            if (backdrop == null || backdrop.Size != ClientSize)
+            {
+                if (backdrop != null) backdrop.Dispose();
+                backdrop = new Bitmap(ClientSize.Width, ClientSize.Height);
+            }
+            using (var graphics = Graphics.FromImage(backdrop))
+                FireworksScene.Draw(graphics, ClientSize, animationTime.Elapsed.TotalSeconds);
+            Invalidate(true);
+        }
+        private void UpdateAnimation()
+        {
+            bool enabled = ready && engine.GoalReached && Visible && WindowState != FormWindowState.Minimized && !systemSuspended;
+            if (enabled == animation.Enabled) return;
+            animation.Enabled = enabled;
+            if (enabled) { animationTime.Start(); RenderBackdrop(); }
+            else
+            {
+                animationTime.Stop();
+                if (backdrop != null) { backdrop.Dispose(); backdrop = null; }
+                if (!engine.GoalReached) animationTime.Reset();
+                Invalidate(true);
+            }
+        }
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
@@ -436,9 +481,16 @@ namespace DualClock
 
         private void UpdateDisplay()
         {
+            wallClock.SetValue(ClockEngine.FormatTime(DateTime.Now), true, "当前时间");
             study.SetValue(ClockEngine.Format(state.StudyTicks), engine.Running && state.Selected == 0, "学习 / 工作");
             rest.SetValue(ClockEngine.Format(state.RestTicks), engine.Running && state.Selected == 1, "休息 / 娱乐");
             studyStatus.Text = StatusFor(0); restStatus.Text = StatusFor(1);
+            if (state.GoalTicks > 0)
+                studyStatus.Text = (engine.GoalReached ? "已达成 · " : "目标 ") + ClockEngine.Format(state.GoalTicks);
+            string goalTip = state.GoalTicks == 0 ? "设置学习 / 工作目标" :
+                "目标 " + ClockEngine.Format(state.GoalTicks) + " · 已学习 " + ClockEngine.Format(state.StudyTicks);
+            if (tips.GetToolTip(goal) != goalTip) tips.SetToolTip(goal, goalTip);
+            if (goal.Lit != (state.GoalTicks > 0)) { goal.Lit = state.GoalTicks > 0; goal.Invalidate(); }
             studyStatus.ForeColor = engine.Running && state.Selected == 0 ? Color.FromArgb(190,195,204) : Palette.Muted;
             restStatus.ForeColor = engine.Running && state.Selected == 1 ? Color.FromArgb(190,195,204) : Palette.Muted;
             studyLabel.ForeColor = engine.Running && state.Selected == 0 ? Palette.Foreground : Color.FromArgb(145,150,159);
@@ -446,8 +498,9 @@ namespace DualClock
             main.Text = !state.Started ? "开始学习" : state.Selected == 0 ? "切换到休息" : "切换到学习";
             reset.Enabled = state.Started || state.StudyTicks > 0 || state.RestTicks > 0;
             string info = saveError ? "保存失败 · 请检查磁盘空间和数据目录权限" :
-                message != null && DateTime.UtcNow < messageUntil ? message : "空格切换  ·  F11 全屏";
+                message != null && DateTime.UtcNow < messageUntil ? message : "";
             if (footer.Text != info) footer.Text = info;
+            UpdateAnimation();
         }
         private string StatusFor(int side)
         {
@@ -530,6 +583,27 @@ namespace DualClock
             historyForm.Icon = Icon;
             historyForm.Show(this);
         }
+        private void ShowGoal()
+        {
+            engine.Tick();
+            using (var dialog = new GoalForm(state.GoalTicks, state.StudyTicks, dpi))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                try
+                {
+                    engine.SetGoal(dialog.GoalTicks, PersistState);
+                    if (animation.Enabled) animationTime.Restart();
+                    else animationTime.Reset();
+                    UpdateDisplay();
+                }
+                catch (Exception e)
+                {
+                    if (!StateStore.Recoverable(e)) throw;
+                    UpdateDisplay();
+                    MessageBox.Show(this, "目标保存失败，已恢复原设置。请检查磁盘空间和数据目录权限。", Branding.Name);
+                }
+            }
+        }
         private void PowerChanged(object sender, PowerModeChangedEventArgs e)
         {
             if (e.Mode != PowerModes.Suspend && e.Mode != PowerModes.Resume) return;
@@ -539,7 +613,8 @@ namespace DualClock
                 {
                     Action update = delegate
                     {
-                        if (e.Mode == PowerModes.Suspend) engine.Suspend();
+                        systemSuspended = e.Mode == PowerModes.Suspend;
+                        if (systemSuspended) engine.Suspend();
                         else engine.Resume();
                         Changed();
                     };
@@ -633,7 +708,7 @@ namespace DualClock
                     e.Cancel = true;
                     return;
                 }
-                closing = true; timer.Stop();
+                closing = true; timer.Stop(); animation.Stop();
                 SystemEvents.PowerModeChanged -= PowerChanged;
                 SystemEvents.DisplaySettingsChanged -= DisplayChanged;
                 SystemEvents.SessionEnding -= SessionEnding;
@@ -647,7 +722,8 @@ namespace DualClock
                 SystemEvents.PowerModeChanged -= PowerChanged;
                 SystemEvents.DisplaySettingsChanged -= DisplayChanged;
                 SystemEvents.SessionEnding -= SessionEnding;
-                timer.Dispose(); tips.Dispose();
+                timer.Dispose(); tips.Dispose(); animation.Dispose();
+                if (backdrop != null) { backdrop.Dispose(); backdrop = null; }
                 foreach (Control control in Controls)
                     if (control.Tag as string == "font-owned") control.Font.Dispose();
             }
