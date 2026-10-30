@@ -38,13 +38,13 @@ namespace DualClock
             var clock = new FakeClock { UtcNow = new DateTime(2026,10,29,12,0,0,DateTimeKind.Utc) };
             var state = new AppState();
             var engine = new ClockEngine(state, clock, TimeZoneInfo.Utc);
-            clock.Advance(12); engine.Tick(); Equal(state.StudyTicks, 0, "Startup paused");
+            clock.Advance(12); engine.Tick(); Equal(state.StudyTicks, 0, "First launch waits for start");
             engine.Switch(); clock.Advance(10); engine.Switch();
             Equal(state.StudyTicks, 10, "Switch settles study");
-            clock.Advance(4); engine.TogglePause(); Equal(state.RestTicks, 4, "Pause settles rest");
-            clock.Advance(7); engine.Tick(); Equal(state.RestTicks, 4, "Pause excludes elapsed time");
-            engine.Switch(); Check(!engine.Running && state.Selected == 0, "Switch while paused stays paused");
-            engine.TogglePause(); clock.Advance(3); engine.Tick(); Equal(state.StudyTicks, 13, "Resume selected side");
+            clock.Advance(4); engine.Suspend(); Equal(state.RestTicks, 4, "Suspend settles rest");
+            clock.Advance(7); engine.Tick(); Equal(state.RestTicks, 4, "Suspend excludes elapsed time");
+            engine.Resume(); engine.Switch(); Check(engine.Running && state.Selected == 0, "Switch after wake keeps timer running");
+            clock.Advance(3); engine.Tick(); Equal(state.StudyTicks, 13, "Continue selected side");
             for (int i=0;i<1000;i++) engine.Switch();
             Equal(state.StudyTicks+state.RestTicks, 17, "Rapid switches preserve total");
             engine.Reset(); Check(!state.Started && !engine.Running && state.StudyTicks==0 && state.RestTicks==0, "Reset clears session");
@@ -59,8 +59,8 @@ namespace DualClock
             Equal(state.Days.Sum(d=>d.StudyTicks),172805,"Multi-day sum exact");
             engine.Suspend(); long before = state.StudyTicks;
             clock.UtcNow = clock.UtcNow.AddHours(8); // Real unbiased time excludes sleep.
-            clock.Advance(4); engine.Tick(); Check(state.StudyTicks==before && !engine.Running,"Sleep and wake stay paused");
-            engine.TogglePause(); clock.Advance(2); engine.Tick(); Check(state.StudyTicks==before+2*TimeSpan.TicksPerSecond,"Wake manual resume");
+            clock.Advance(4); engine.Tick(); Check(state.StudyTicks==before && !engine.Running,"Sleep excludes elapsed before resume event");
+            engine.Resume(); clock.Advance(2); engine.Tick(); Check(state.StudyTicks==before+2*TimeSpan.TicksPerSecond,"Wake automatically resumes original side");
             clock.UtcNow = clock.UtcNow.AddHours(-3); clock.Advance(2); engine.Tick();
             Check(state.StudyTicks==before+4*TimeSpan.TicksPerSecond,"Wall-clock rollback never decreases total");
             clock.UtcNow = clock.UtcNow.AddDays(3); clock.Advance(3); engine.Tick();
@@ -82,7 +82,7 @@ namespace DualClock
 
             var store = new StateStore(Path.Combine(root,"persistence")); store.Save(state);
             AppState loaded = store.Load(); Check(loaded.Started && loaded.StudyTicks==state.StudyTicks && loaded.Days.Count==2,"Save/load round trip");
-            var resumed = new ClockEngine(loaded,clock,china); Check(!resumed.Running,"Restart restores paused");
+            var resumed = new ClockEngine(loaded,clock,china); Check(resumed.Running,"Restart automatically restores running state");
             store.Save(state); File.WriteAllText(store.FilePath,"broken");
             loaded = store.Load(); Check(store.RecoveryMessage!=null && loaded.StudyTicks==state.StudyTicks,"Corrupt primary recovers backup");
             store.Save(loaded); File.WriteAllText(store.FilePath,"broken again");
@@ -92,9 +92,48 @@ namespace DualClock
             string text = File.ReadAllText(csv,Encoding.UTF8); Check(text.Contains("日期,学习/工作时长") && text.Contains("2026-10-30,00:00:02"),"CSV content");
             string[] lines = File.ReadAllLines(csv); Check(lines[1].StartsWith("2026-10-30,"),"CSV reverse chronological");
 
+            LifecycleTests(root);
             HistoryFeatureTests(root);
             if (args.Contains("--layout")) LayoutTests(root);
             Console.WriteLine("ALL PASSED: " + passed);
+        }
+
+        private static void LifecycleTests(string root)
+        {
+            foreach (int side in new[] {0,1})
+            {
+                var clock = new FakeClock {UtcNow=new DateTime(2026,10,29,23,59,50,DateTimeKind.Utc)};
+                var state = new AppState();
+                var engine = new ClockEngine(state,clock,TimeZoneInfo.Utc);
+                engine.Resume(); clock.Advance(1); engine.Tick();
+                Check(!engine.Running && !state.Started && state.Days.Count==0,"Wake never starts unused timer " + side);
+                engine.Switch(); if (side==1) engine.Switch();
+                clock.Advance(2); engine.Tick();
+                var store = new StateStore(Path.Combine(root,"restart-side-"+side)); store.Save(state);
+                clock.Advance(86400); // Closed time spans midnight and must not enter any daily record.
+                var loaded=store.Load(); engine=new ClockEngine(loaded,clock,TimeZoneInfo.Utc);
+                Check(engine.Running && loaded.Selected==side && loaded.StudyTicks+loaded.RestTicks==2*TimeSpan.TicksPerSecond,
+                    "Restart retains side and excludes closed time " + side);
+                clock.Advance(3); engine.Tick();
+                Equal(loaded.Days.Single(d=>d.Date=="2026-10-30").StudyTicks+loaded.Days.Single(d=>d.Date=="2026-10-30").RestTicks,
+                    3,"Cross-day restart records only new elapsed time " + side);
+                clock.Advance(1); engine.Resume(); clock.Advance(2); engine.Resume(); engine.Tick();
+                Equal(loaded.StudyTicks+loaded.RestTicks,8,"Duplicate resume preserves running elapsed time " + side);
+                clock.Advance(2); engine.Suspend(); engine.Suspend();
+                clock.UtcNow=clock.UtcNow.AddHours(8); // Unbiased clock does not advance while asleep.
+                clock.Advance(4); engine.Resume(); clock.Advance(2); engine.Tick();
+                Equal(loaded.StudyTicks+loaded.RestTicks,12,"Wake excludes sleep and resumes same side " + side);
+                Check(engine.Running && loaded.Selected==side && loaded.Days.Sum(d=>d.SwitchCount)==side,
+                    "Automatic restart and wake never count as switches " + side);
+                engine.Switch();
+                Check(engine.Running && loaded.Selected==1-side && loaded.Days.Sum(d=>d.SwitchCount)==side+1,
+                    "First switch after wake counts exactly once " + side);
+                engine.Reset(); engine.Suspend(); clock.Advance(2); engine.Resume(); engine.Tick();
+                Check(!engine.Running && !loaded.Started && loaded.StudyTicks+loaded.RestTicks==0,
+                    "Wake after reset stays ready to start " + side);
+                store.Save(loaded); var reset=store.Load();
+                Check(!new ClockEngine(reset,clock,TimeZoneInfo.Utc).Running,"Restart after reset stays ready to start " + side);
+            }
         }
 
         private static void HistoryFeatureTests(string root)
@@ -104,10 +143,10 @@ namespace DualClock
             var engine = new ClockEngine(state,clock,TimeZoneInfo.Utc);
             engine.Switch(); Check(state.Days.Sum(d=>d.SwitchCount)==0,"First start does not count a switch");
             engine.Switch(); Check(state.Days.Single().SwitchCount==1,"Instant switch creates zero-duration history with count");
-            engine.TogglePause(); engine.Switch();
-            Check(!engine.Running && state.Days.Single().SwitchCount==2,"Paused side change counts exactly once");
-            engine.TogglePause(); engine.Suspend(); engine.Reset();
-            Check(state.Days.Single().SwitchCount==2,"Pause resume suspend reset do not increment count");
+            engine.Switch();
+            Check(engine.Running && state.Days.Single().SwitchCount==2,"Running side change counts exactly once");
+            engine.Suspend(); engine.Resume(); engine.Reset();
+            Check(state.Days.Single().SwitchCount==2,"Automatic resume suspend reset do not increment count");
             for (int i=0;i<3;i++)
             {
                 engine.Switch(); clock.Advance(2); engine.Switch(); clock.Advance(1); engine.Reset();
@@ -138,9 +177,9 @@ namespace DualClock
             Check(state.Days.Count==1 && state.Days.Single().SwitchCount==0 && !state.Days.Single().HasUnknownSwitchCount,
                 "Subsequent timing recreates today as a new complete record");
             Equal(state.Days.Single().StudyTicks,3,"Recreated today excludes deleted duration");
-            engine.TogglePause(); Check(engine.DeleteDay(engine.Today,store.Save),"Delete paused today succeeds");
-            clock.Advance(4); engine.Tick(); Check(state.Days.Count==0,"Paused timer does not immediately recreate deleted today");
-            engine.Switch(); Check(state.Days.Single().SwitchCount==1 && !engine.Running,"Paused switch recreates deleted today with count one");
+            engine.Suspend(); Check(engine.DeleteDay(engine.Today,store.Save),"Delete suspended today succeeds");
+            clock.Advance(4); engine.Tick(); Check(state.Days.Count==0,"Suspended timer does not immediately recreate deleted today");
+            engine.Resume(); engine.Switch(); Check(state.Days.Single().SwitchCount==1 && engine.Running,"Switch after wake recreates deleted today with count one");
 
             state.Days.Insert(0,new DayRecord {Date="2026-10-28",StudyTicks=17,SwitchCount=7,HasUnknownSwitchCount=true});
             store.Save(state);
@@ -180,7 +219,8 @@ namespace DualClock
             var reopened=new StateStore(legacyDirectory).Load();
             Check(reopened.Version==2 && reopened.Days.Single().SwitchCount==1 && reopened.Days.Single().HasUnknownSwitchCount,
                 "V2 round-trip preserves count and unknown marker");
-            Check(!new ClockEngine(reopened,clock,TimeZoneInfo.Utc).Running,"Upgrade restart remains paused");
+            var upgradedEngine=new ClockEngine(reopened,clock,TimeZoneInfo.Utc);
+            Check(upgradedEngine.Running && reopened.Selected==0,"Upgrade restart automatically resumes preserved side");
             string csv=Path.Combine(root,"feature-history.csv");
             StateStore.ExportCsv(csv,new[] {migrated.Days.Single(),new DayRecord {Date="2026-10-29",HasUnknownSwitchCount=true},
                 new DayRecord {Date="2026-10-28",SwitchCount=4}});
@@ -214,6 +254,8 @@ namespace DualClock
                 form.Size = new Size(size.Width*dpi/96,size.Height*dpi/96);
                 typeof(ClockForm).GetMethod("LayoutContents",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(form,null);
                 var buttons = form.Controls.OfType<SoftButton>().ToList();
+                Check(buttons.Count==7 && !buttons.Any(b=>b.Text=="暂停" || b.Text=="继续"),
+                    "No manual pause control " + size + " DPI " + dpi);
                 Check(form.Controls.Cast<Control>().All(c=>form.ClientRectangle.Contains(c.Bounds)),"Bounds " + size + " DPI " + dpi);
                 Check(buttons.All(a=>buttons.All(b=>a==b || !a.Bounds.IntersectsWith(b.Bounds))),"Buttons do not overlap " + size + " DPI " + dpi);
                 var brand=form.Controls.OfType<Label>().Single(l=>l.Text==Branding.Name);
@@ -245,6 +287,11 @@ namespace DualClock
                 typeof(ClockForm).GetMethod("PowerChanged",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(form,
                     new object[]{null,new PowerModeChangedEventArgs(PowerModes.Suspend)});
                 Check(!liveEngine.Running,"Power suspend event pauses running UI engine");
+                var power=typeof(ClockForm).GetMethod("PowerChanged",BindingFlags.Instance|BindingFlags.NonPublic);
+                power.Invoke(form,new object[]{null,new PowerModeChangedEventArgs(PowerModes.Resume)});
+                power.Invoke(form,new object[]{null,new PowerModeChangedEventArgs(PowerModes.Resume)});
+                Check(liveEngine.Running && liveEngine.State.Selected==0 && liveEngine.State.Days.Sum(d=>d.SwitchCount)==0,
+                    "Power resume and duplicate notification restore original side without switches");
                 form.Close();
             }
             HistoryLayoutTests(root);
@@ -255,12 +302,19 @@ namespace DualClock
                 primary.PerformClick(); primary.PerformClick();
                 var keyMethod=typeof(ClockForm).GetMethod("ProcessCmdKey",BindingFlags.Instance|BindingFlags.NonPublic);
                 keyMethod.Invoke(form,new object[]{Message.Create(form.Handle,0,IntPtr.Zero,IntPtr.Zero),Keys.Space});
-                form.Controls.OfType<SoftButton>().Single(b=>b.Text=="暂停").PerformClick();
                 keyMethod.Invoke(form,new object[]{Message.Create(form.Handle,0,IntPtr.Zero,IntPtr.Zero),Keys.Space});
                 var saved=new StateStore(Path.Combine(root,"counter-ui")).Load();
-                Check(saved.Days.Sum(d=>d.SwitchCount)==3,"Button and Space paths immediately persist switches including paused changes");
+                Check(saved.Days.Sum(d=>d.SwitchCount)==3,"Button and Space paths immediately persist each switch");
                 var liveEngine=(ClockEngine)typeof(ClockForm).GetField("engine",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(form);
-                Check(!liveEngine.Running,"Space switch preserves paused UI engine");
+                Check(liveEngine.Running && saved.Selected==1,"Space switch keeps selected side running");
+                form.Close();
+            }
+            using (var form = new ClockForm(new StateStore(Path.Combine(root,"counter-ui"))))
+            {
+                form.Show(); Application.DoEvents();
+                var liveEngine=(ClockEngine)typeof(ClockForm).GetField("engine",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(form);
+                Check(liveEngine.Running && liveEngine.State.Selected==1 && liveEngine.State.Days.Sum(d=>d.SwitchCount)==3,
+                    "Reopened UI automatically resumes saved rest side without extra switch");
                 form.Close();
             }
         }

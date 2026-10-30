@@ -228,7 +228,7 @@ namespace DualClock
         private readonly Label brand = new Label(), studyLabel = new Label(), restLabel = new Label();
         private readonly Label studyStatus = new Label(), restStatus = new Label(), footer = new Label();
         private readonly SegmentDisplay study = new SegmentDisplay(), rest = new SegmentDisplay();
-        private readonly SoftButton main = new SoftButton(), pause = new SoftButton(), reset = new SoftButton(), history = new SoftButton();
+        private readonly SoftButton main = new SoftButton(), reset = new SoftButton(), history = new SoftButton();
         private readonly SoftButton pin = new SoftButton(), min = new SoftButton(), full = new SoftButton(), close = new SoftButton();
         private bool ready, fullscreen, closing, saveError;
         private int dpi = 96;
@@ -270,10 +270,10 @@ namespace DualClock
             Controls.Add(study); Controls.Add(rest);
             main.Primary = true;
             main.AccessibleName = "开始学习或切换计时";
-            pause.Text = "暂停"; reset.Text = "重置"; history.Text = "历史";
-            foreach (SoftButton button in new[] { main, pause, reset, history, pin, min, full, close }) Controls.Add(button);
-            main.TabIndex = 0; pause.TabIndex = 1; reset.TabIndex = 2; history.TabIndex = 3;
-            pin.TabIndex = 4; min.TabIndex = 5; full.TabIndex = 6; close.TabIndex = 7;
+            reset.Text = "重置"; history.Text = "历史";
+            foreach (SoftButton button in new[] { main, reset, history, pin, min, full, close }) Controls.Add(button);
+            main.TabIndex = 0; reset.TabIndex = 1; history.TabIndex = 2;
+            pin.TabIndex = 3; min.TabIndex = 4; full.TabIndex = 5; close.TabIndex = 6;
             SetupIcon(pin, "pin", "置顶", "保持显示在其他普通窗口上方");
             SetupIcon(min, "min", "最小化", "最小化，继续计时");
             SetupIcon(full, "full", "全屏", "全屏 / 还原 · F11");
@@ -281,7 +281,6 @@ namespace DualClock
             tips.SetToolTip(main, "切换学习与休息 · 空格");
             tips.SetToolTip(reset, "清零本次累计，保留每日历史");
             main.Click += delegate { engine.Switch(); Changed(); };
-            pause.Click += delegate { engine.TogglePause(); Changed(); };
             reset.Click += delegate { ConfirmReset(); };
             history.Click += delegate { ShowHistory(); };
             pin.Click += delegate
@@ -394,9 +393,7 @@ namespace DualClock
                 bottom = h - 61;
             }
             Place(main, center - bw/2, bottom, bw, bh);
-            float sideWidth = Math.Min(56, (center - bw/2 - 32) / 2f);
-            Place(pause, 20, bottom + (bh-32)/2, sideWidth, 32);
-            Place(reset, 26 + sideWidth, bottom + (bh-32)/2, sideWidth, 32);
+            Place(reset, 20, bottom + (bh-32)/2, 56, 32);
             Place(history, w-76, bottom + (bh-32)/2, 56, 32);
             Place(footer, 12, h - 19, w - 24, 14);
             SetFont(brand, 10, FontStyle.Bold);
@@ -404,7 +401,7 @@ namespace DualClock
             SetFont(restLabel, Math.Min(13, 10*bodyScale), FontStyle.Regular);
             SetFont(studyStatus, 8, FontStyle.Regular); SetFont(restStatus, 8, FontStyle.Regular);
             SetFont(footer, 7, FontStyle.Regular);
-            foreach (SoftButton button in new[] { main, pause, reset, history, pin, min, full, close })
+            foreach (SoftButton button in new[] { main, reset, history, pin, min, full, close })
             {
                 button.ScaleFactor = s;
                 SetFont(button, button == main ? 10 : 8.5f, button == main ? FontStyle.Bold : FontStyle.Regular);
@@ -447,8 +444,6 @@ namespace DualClock
             studyLabel.ForeColor = engine.Running && state.Selected == 0 ? Palette.Foreground : Color.FromArgb(145,150,159);
             restLabel.ForeColor = engine.Running && state.Selected == 1 ? Palette.Foreground : Color.FromArgb(145,150,159);
             main.Text = !state.Started ? "开始学习" : state.Selected == 0 ? "切换到休息" : "切换到学习";
-            pause.Text = engine.Running ? "暂停" : "继续";
-            pause.Enabled = state.Started;
             reset.Enabled = state.Started || state.StudyTicks > 0 || state.RestTicks > 0;
             string info = saveError ? "保存失败 · 请检查磁盘空间和数据目录权限" :
                 message != null && DateTime.UtcNow < messageUntil ? message : "空格切换  ·  F11 全屏";
@@ -458,7 +453,7 @@ namespace DualClock
         {
             if (!state.Started) return "待开始";
             if (state.Selected != side) return "等待切换";
-            return engine.Running ? "●  正在计时" : "已暂停";
+            return engine.Running ? "●  正在计时" : "等待系统唤醒";
         }
         private void Notify(string text, int seconds)
         {
@@ -537,13 +532,19 @@ namespace DualClock
         }
         private void PowerChanged(object sender, PowerModeChangedEventArgs e)
         {
-            if (e.Mode != PowerModes.Suspend) return;
+            if (e.Mode != PowerModes.Suspend && e.Mode != PowerModes.Resume) return;
             if (IsHandleCreated && !IsDisposed)
             {
                 try
                 {
-                    if (InvokeRequired) Invoke((Action)delegate { engine.Suspend(); Changed(); });
-                    else { engine.Suspend(); Changed(); }
+                    Action update = delegate
+                    {
+                        if (e.Mode == PowerModes.Suspend) engine.Suspend();
+                        else engine.Resume();
+                        Changed();
+                    };
+                    if (InvokeRequired) Invoke(update);
+                    else update();
                 }
                 catch (InvalidOperationException) {}
             }

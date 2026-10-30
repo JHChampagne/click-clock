@@ -71,7 +71,7 @@ namespace DualClock
             this.clock = clock;
             this.zone = zone;
             anchor = clock.Ticks;
-            Running = false;
+            Running = state.Started;
         }
 
         public void Tick()
@@ -153,12 +153,12 @@ namespace DualClock
             return day.SwitchCount.ToString(CultureInfo.InvariantCulture) + "次";
         }
 
-        public void TogglePause()
+        public void Resume()
         {
-            Tick();
-            if (!State.Started) return;
-            Running = !Running;
+            // Ignore repeated resume notifications without discarding unsaved elapsed time.
+            if (Running || !State.Started) return;
             anchor = clock.Ticks;
+            Running = true;
         }
 
         public void Suspend()
