@@ -1,6 +1,6 @@
 # Click Clock
 
-双击 **Click Clock.exe** 即可使用。单文件、免安装、无需管理员权限，支持离线运行。
+双击下载的 EXE 即可使用。GitHub 单文件下载名为 **Click-Clock.exe**，便携 ZIP 内名为 **Click Clock.exe**。单文件、免安装、无需管理员权限，支持离线运行。
 
 ## 开始使用
 

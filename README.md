@@ -10,9 +10,11 @@
 
 在 [Releases](https://github.com/JHChampagne/click-clock/releases/latest) 下载最新版：
 
-- [Click Clock.exe](https://github.com/JHChampagne/click-clock/releases/latest/download/Click%20Clock.exe)：单文件，双击即用。
+- [Click-Clock.exe](https://github.com/JHChampagne/click-clock/releases/latest/download/Click-Clock.exe)：单文件，双击即用。
 - 便携 ZIP：包含 EXE、中文使用说明与 MIT 许可证。
 - `SHA256SUMS.txt`：用于核对下载文件的完整性。
+
+GitHub 的单文件下载名为 `Click-Clock.exe`；便携包内的程序名为 `Click Clock.exe`。
 
 支持 Windows 10 1903 及以上和 Windows 11，使用系统自带的 .NET Framework。无需安装 Python、Node、额外字体或应用运行库，完全离线使用。
 

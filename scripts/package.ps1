@@ -11,11 +11,12 @@ $releasePath = Join-Path $repoRoot ('artifacts\release\v' + $version)
 $stagingPath = Join-Path $repoRoot ('artifacts\package-staging\' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $releasePath,$stagingPath -Force | Out-Null
 
-$releaseApp = Join-Path $releasePath 'Click Clock.exe'
+$releaseApp = Join-Path $releasePath 'Click-Clock.exe'
 $releaseUsage = Join-Path $releasePath 'Usage.zh-CN.md'
 Copy-Item -LiteralPath $appPath -Destination $releaseApp -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\usage.zh-CN.md') -Destination $releaseUsage -Force
-Copy-Item -LiteralPath $releaseApp,$releaseUsage,(Join-Path $repoRoot 'LICENSE') -Destination $stagingPath
+Copy-Item -LiteralPath $appPath -Destination (Join-Path $stagingPath 'Click Clock.exe')
+Copy-Item -LiteralPath $releaseUsage,(Join-Path $repoRoot 'LICENSE') -Destination $stagingPath
 $zipPath = Join-Path $releasePath ('Click-Clock-v' + $version + '-win.zip')
 Compress-Archive -LiteralPath @((Join-Path $stagingPath 'Click Clock.exe'),(Join-Path $stagingPath 'Usage.zh-CN.md'),
     (Join-Path $stagingPath 'LICENSE')) -DestinationPath $zipPath -Force
