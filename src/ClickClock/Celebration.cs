@@ -25,13 +25,15 @@ namespace DualClock
         {
             g.Clear(Palette.Background);
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            float scale = Math.Min(size.Width / 480f, size.Height / 250f);
+            bool portrait = size.Width < size.Height;
+            float scale = portrait ? Math.Min(size.Width / 400f,size.Height / 720f)
+                : Math.Min(size.Width / 480f, size.Height / 250f);
             for (int burst = 0; burst < 3; burst++)
             {
                 double time = (seconds + burst * 1.67) % 5.6;
                 int cycle = (int)((seconds + burst * 1.67) / 5.6);
                 float x = size.Width * (0.18f + ((burst * 37 + cycle * 23) % 65) / 100f);
-                float y = size.Height * (0.23f + ((burst * 17 + cycle * 13) % 26) / 100f);
+                float y = size.Height * (0.20f + ((burst * 23 + cycle * 13) % (portrait ? 56 : 30)) / 100f);
                 Color color = Colors[burst];
                 if (time < 0.7)
                 {

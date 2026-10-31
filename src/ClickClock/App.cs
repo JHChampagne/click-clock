@@ -368,61 +368,41 @@ namespace DualClock
             normalBounds = Bounds;
         }
 
+        private ClockLayout layout;
         private void LayoutContents()
         {
             if (main == null || ClientSize.Width == 0) return;
-            float s = ScaleFactor, w = ClientSize.Width / s, h = ClientSize.Height / s;
-            float bodyScale = Math.Min(2.4f, Math.Min(w / 480f, h / 250f));
-            float digitHeight = Math.Min(112, 48 * bodyScale);
-            float offsetY = h > 400 ? (h - 250 * bodyScale) / 2 : 0;
-            float labelY = h > 400 ? offsetY + 57 * bodyScale : 57 + Math.Max(0, h - 250) * .20f;
-            float digitY = labelY + 31 * Math.Min(bodyScale, 1.5f);
-            float statusY = digitY + digitHeight + 10;
-            float center = w / 2f;
-            Place(brand, 19, 8, 135, 24);
-            Place(wallClock, center - 31, 9, 62, 22);
-            Place(pin, w - 132, 6, 28, 28);
-            Place(min, w - 102, 6, 28, 28);
-            Place(full, w - 72, 6, 28, 28);
-            Place(close, w - 42, 6, 28, 28);
-            Place(studyLabel, 18, labelY, center - 36, 20);
-            Place(restLabel, center + 18, labelY, center - 36, 20);
-            Place(study, 19, digitY, center - 38, digitHeight + 2);
-            Place(rest, center + 19, digitY, center - 38, digitHeight + 2);
-            Place(studyStatus, 18, statusY, center - 36, 18);
-            Place(restStatus, center + 18, statusY, center - 36, 18);
-            float bottom = h > 400 ? offsetY + 184 * bodyScale : h - 66;
-            float bw = Math.Min(190, w / 3f), bh = Math.Min(52, Math.Max(38, 44 * bodyScale));
-            if (h <= 230)
+            layout = ClockLayout.Calculate(ClientSize.Width / ScaleFactor, ClientSize.Height / ScaleFactor);
+            Place(brand, new RectangleF(19,8,135,24));
+            Place(pin, new RectangleF(ClientSize.Width / ScaleFactor-132,6,28,28));
+            Place(min, new RectangleF(ClientSize.Width / ScaleFactor-102,6,28,28));
+            Place(full, new RectangleF(ClientSize.Width / ScaleFactor-72,6,28,28));
+            Place(close, new RectangleF(ClientSize.Width / ScaleFactor-42,6,28,28));
+            Place(wallClock,layout.Clock);
+            Place(studyLabel,layout.StudyLabel); Place(restLabel,layout.RestLabel);
+            Place(study,layout.Study); Place(rest,layout.Rest);
+            Place(studyStatus,layout.StudyStatus); Place(restStatus,layout.RestStatus);
+            Place(main,layout.Main); Place(reset,layout.Reset); Place(goal,layout.Goal); Place(history,layout.History);
+            Place(footer,layout.Footer);
+            float c=layout.ControlScale;
+            SetFont(brand,10,FontStyle.Bold);
+            SetFont(studyLabel,Math.Max(8,10*c),FontStyle.Regular);
+            SetFont(restLabel,Math.Max(8,10*c),FontStyle.Regular);
+            SetFont(studyStatus,Math.Max(7,8*c),FontStyle.Regular);
+            SetFont(restStatus,Math.Max(7,8*c),FontStyle.Regular);
+            SetFont(footer,7,FontStyle.Regular);
+            foreach (SoftButton button in new[] {main,reset,goal,history,pin,min,full,close})
             {
-                labelY = 48;
-                digitY = 76;
-                statusY = digitY + digitHeight + 6;
-                Place(studyLabel, 16, labelY, center-32, 18); Place(restLabel, center+16,labelY,center-32,18);
-                Place(study, 15,digitY,center-30,digitHeight); Place(rest,center+15,digitY,center-30,digitHeight);
-                Place(studyStatus,16,statusY,center-32,16); Place(restStatus,center+16,statusY,center-32,16);
-                bottom = h - 61;
+                bool tool=button.Glyph!=null;
+                button.ScaleFactor=ScaleFactor*(tool ? 1 : c);
+                SetFont(button,tool ? 8.5f : Math.Max(8,(button==main ? 10 : 8.5f)*c),
+                    button==main ? FontStyle.Bold : FontStyle.Regular);
             }
-            Place(main, center - bw/2, bottom, bw, bh);
-            Place(reset, 20, bottom + (bh-32)/2, 44, 32);
-            Place(goal, 70, bottom + (bh-32)/2, 44, 32);
-            Place(history, w-76, bottom + (bh-32)/2, 56, 32);
-            Place(footer, 12, h - 19, w - 24, 14);
-            SetFont(brand, 10, FontStyle.Bold);
-            SetFont(studyLabel, Math.Min(13, 10*bodyScale), FontStyle.Regular);
-            SetFont(restLabel, Math.Min(13, 10*bodyScale), FontStyle.Regular);
-            SetFont(studyStatus, 8, FontStyle.Regular); SetFont(restStatus, 8, FontStyle.Regular);
-            SetFont(footer, 7, FontStyle.Regular);
-            foreach (SoftButton button in new[] { main, reset, goal, history, pin, min, full, close })
-            {
-                button.ScaleFactor = s;
-                SetFont(button, button == main ? 10 : 8.5f, button == main ? FontStyle.Bold : FontStyle.Regular);
-            }
-            Invalidate();
+            Invalidate(true);
         }
-        private void Place(Control c, float x, float y, float w, float h)
+        private void Place(Control control, RectangleF bounds)
         {
-            c.SetBounds(Px(x), Px(y), Px(w), Px(h));
+            control.SetBounds(Px(bounds.X),Px(bounds.Y),Px(bounds.Width),Px(bounds.Height));
         }
         private void SetFont(Control c, float points, FontStyle style)
         {
@@ -475,7 +455,7 @@ namespace DualClock
             using (var pen = new Pen(Color.FromArgb(36, 39, 45)))
             {
                 e.Graphics.DrawRectangle(pen, 0, 0, Width-1, Height-1);
-                e.Graphics.DrawLine(pen, Width/2, studyLabel.Top + Px(6), Width/2, studyStatus.Bottom - Px(3));
+                if (layout != null) e.Graphics.DrawLine(pen, Px(layout.DividerStart.X), Px(layout.DividerStart.Y), Px(layout.DividerEnd.X), Px(layout.DividerEnd.Y));
             }
         }
 

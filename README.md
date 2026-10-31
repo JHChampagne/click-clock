@@ -24,6 +24,7 @@ GitHub 的单文件下载名为 `Click-Clock.exe`；便携包内的程序名为 
 - 大按钮或空格一键切换，支持重置；开始后始终在两侧之间计时。
 - 黑底数码管显示，480 × 250 默认窗口、400 × 220 最小窗口，支持高 DPI。
 - 顶部小号数码管显示当前本地时间（24 小时制）。
+- 当前时间位于工具栏下方居中；横向窗口左右计时，窄高窗口自动上下计时，宽屏全屏同步放大并集中排列操作按钮。
 - 设置学习目标，累计达成后循环播放柔和烟花；重置保留目标，清除或修改目标可调整庆祝状态。
 - 拖动缩放、最小化、置顶和全屏；首次启动优先定位到竖向副屏右上角。
 - 每日历史、切换次数、单条删除，以及 CSV 导出。
@@ -35,6 +36,8 @@ GitHub 的单文件下载名为 `Click-Clock.exe`；便携包内的程序名为 
 详细操作、历史统计规则及数据迁移见 [中文使用说明](docs/usage.zh-CN.md)。
 
 ![达成学习目标后的背景烟花](docs/images/goal-achieved.png)
+
+[宽屏布局截图](docs/images/wide.png) · [竖向布局截图](docs/images/portrait.png)
 
 ## 数据兼容
 
@@ -77,7 +80,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test.ps1 -IncludeL
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package.ps1
 ```
 
-当前源码版本为 **1.2.0**，本地发布文件位于 `artifacts/release/v1.2.0/`。GitHub Actions 会在推送、拉取请求和手动触发时构建、运行核心检查并保存发布包；上方下载入口对应最近正式发布的 Release。
+当前源码版本为 **1.3.0**，本地发布文件位于 `artifacts/release/v1.3.0/`。GitHub Actions 会在推送、拉取请求和手动触发时构建、运行核心检查并保存发布包；上方下载入口对应最近正式发布的 Release。
 
 ## 项目结构
 

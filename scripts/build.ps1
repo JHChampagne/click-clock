@@ -21,7 +21,7 @@ $appPath = Join-Path $appOutput 'Click Clock.exe'
 $testPath = Join-Path $testOutput 'ClickClock.Tests.exe'
 $common = @('/nologo','/optimize+','/platform:anycpu','/codepage:65001',
     '/r:System.dll','/r:System.Core.dll','/r:System.Drawing.dll','/r:System.Windows.Forms.dll','/r:System.Xml.dll')
-$sources = @((Join-Path $sourceRoot 'Core.cs'),(Join-Path $sourceRoot 'App.cs'),(Join-Path $sourceRoot 'Celebration.cs'))
+$sources = @((Join-Path $sourceRoot 'Core.cs'),(Join-Path $sourceRoot 'App.cs'),(Join-Path $sourceRoot 'Celebration.cs'),(Join-Path $sourceRoot 'ClockLayout.cs'))
 $manifest = '/win32manifest:' + (Join-Path $sourceRoot 'app.manifest')
 $icon = '/win32icon:' + (Join-Path $repoRoot 'assets\app.ico')
 

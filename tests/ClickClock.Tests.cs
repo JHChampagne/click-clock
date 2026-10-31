@@ -18,6 +18,8 @@ namespace DualClock
     }
     internal static class Tests
     {
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr window,IntPtr after,int x,int y,int width,int height,uint flags);
         private static int passed;
         private static void Check(bool ok, string name)
         {
@@ -95,8 +97,41 @@ namespace DualClock
             LifecycleTests(root);
             HistoryFeatureTests(root);
             GoalTests(root);
+            ResponsiveLayoutTests();
             if (args.Contains("--layout")) LayoutTests(root);
             Console.WriteLine("ALL PASSED: " + passed);
+        }
+
+        private static void ResponsiveLayoutTests()
+        {
+            bool contained=true, separate=true, orientation=true;
+            for(int width=400;width<=2000;width+=37)
+            for(int height=220;height<=2000;height+=43)
+            {
+                var l=ClockLayout.Calculate(width,height);
+                var bounds=new RectangleF(0,34,width,height-34);
+                var controls=new[] {l.Clock,l.StudyLabel,l.Study,l.StudyStatus,l.RestLabel,l.Rest,l.RestStatus,l.Main,l.Reset,l.Goal,l.History,l.Footer};
+                contained &= controls.All(r=>r.Width>0 && r.Height>0 && bounds.Contains(r));
+                if(!controls.All(a=>controls.All(b=>a==b || !a.IntersectsWith(b))))
+                {
+                    if(separate) Console.WriteLine("Overlap at " + width + "x" + height + ": " + string.Join(";",controls.Select((a,i)=>i+":"+a)));
+                    separate=false;
+                }
+                orientation &= l.Portrait==(width<height);
+            }
+            Check(contained,"Responsive layout sweep keeps content in window");
+            Check(separate,"Responsive layout sweep has no content overlaps");
+            Check(orientation,"Responsive layout switches at width-height boundary");
+            var small=ClockLayout.Calculate(480,250); var wide=ClockLayout.Calculate(1920,1080);
+            Check(wide.Study.Height>small.Study.Height*3 && wide.Main.Width>small.Main.Width,
+                "Wide fullscreen scales timers and actions beyond compact window");
+            Check(wide.Reset.Left>1920*.25f && wide.History.Right<1920*.75f,
+                "Wide fullscreen groups actions near the center");
+            Check(Math.Abs(small.Clock.Width/small.Main.Width-.85f)<.001f && small.Clock.Y>=34,
+                "Larger wall clock sits below toolbar in proportion to switch button");
+            var portrait=ClockLayout.Calculate(400,720);
+            Check(portrait.Study.Bottom<portrait.Rest.Top && portrait.Main.Bottom<portrait.Reset.Top &&
+                portrait.DividerStart.Y==portrait.DividerEnd.Y,"Portrait layout stacks timers and secondary actions");
         }
 
         private static void GoalTests(string root)
@@ -287,20 +322,28 @@ namespace DualClock
             try { Native.SetProcessDpiAwareness(2); } catch (EntryPointNotFoundException) {}
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             foreach (int dpi in new[] {96,120,144})
-            foreach (Size size in new[] {new Size(480,250),new Size(400,220)})
-            using (var form = new ClockForm(new StateStore(Path.Combine(root,"layout"))))
+            foreach (Size size in new[] {new Size(480,250),new Size(400,220),new Size(400,720),
+                new Size(400,401),new Size(400,400),new Size(401,400),new Size(1920,1080),new Size(1080,1920)})
+            using (var form = new ClockForm(new StateStore(Path.Combine(root,"layout-"+size.Width+"x"+size.Height+"-"+dpi))))
             {
                 Console.WriteLine("Showing layout test window...");
                 form.Show();
                 Application.DoEvents();
                 Console.WriteLine("Layout test window shown.");
                 typeof(ClockForm).GetMethod("SetDpi",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(form,new object[]{dpi});
+                // Allow offscreen render fixtures taller than the attached monitor's tracking limit.
+                form.MaximumSize=new Size(10000,10000);
                 form.Size = new Size(size.Width*dpi/96,size.Height*dpi/96);
+                if(form.ClientSize!=new Size(size.Width*dpi/96,size.Height*dpi/96))
+                    SetWindowPos(form.Handle,IntPtr.Zero,form.Left,form.Top,size.Width*dpi/96,size.Height*dpi/96,0x14);
+                Check(form.ClientSize==new Size(size.Width*dpi/96,size.Height*dpi/96),"Requested render size reached " + size + " DPI " + dpi);
                 typeof(ClockForm).GetMethod("LayoutContents",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(form,null);
                 var buttons = form.Controls.OfType<SoftButton>().ToList();
                 Check(buttons.Count==8 && !buttons.Any(b=>b.Text=="暂停" || b.Text=="继续"),
                     "No manual pause control " + size + " DPI " + dpi);
                 Check(form.Controls.Cast<Control>().All(c=>form.ClientRectangle.Contains(c.Bounds)),"Bounds " + size + " DPI " + dpi);
+                var all=form.Controls.Cast<Control>().ToList();
+                Check(all.All(a=>all.All(b=>a==b || !a.Bounds.IntersectsWith(b.Bounds))),"All controls remain separate after pixel rounding " + size + " DPI " + dpi);
                 Check(buttons.All(a=>buttons.All(b=>a==b || !a.Bounds.IntersectsWith(b.Bounds))),"Buttons do not overlap " + size + " DPI " + dpi);
                 var clockDisplay=form.Controls.OfType<SegmentDisplay>().Single(c=>c.AccessibleName.StartsWith("当前时间"));
                 Check(!buttons.Any(b=>b.Bounds.IntersectsWith(clockDisplay.Bounds)) &&
@@ -308,10 +351,22 @@ namespace DualClock
                 var brand=form.Controls.OfType<Label>().Single(l=>l.Text==Branding.Name);
                 Check(form.Text==Branding.Name && TextRenderer.MeasureText(brand.Text,brand.Font).Width<=brand.ClientSize.Width,
                     "Click Clock branding fits " + size + " DPI " + dpi);
+                Check(form.Controls.OfType<Label>().All(label=>string.IsNullOrEmpty(label.Text) ||
+                    TextRenderer.MeasureText(label.Text,label.Font,Size.Empty,TextFormatFlags.NoPadding).Height<=label.Height+1),
+                    "Labels remain readable " + size + " DPI " + dpi);
+                using (var preview=new Bitmap(form.Width,form.Height))
+                {
+                    form.DrawToBitmap(preview,new Rectangle(Point.Empty,preview.Size));
+                    preview.Save(Path.Combine(root,"layout-"+size.Width+"x"+size.Height+"-"+dpi+".png"));
+                }
+                SetLongSessionPreview(form);
+                var status=form.Controls.OfType<Label>().Single(l=>l.Text.StartsWith("目标 "));
+                Check(TextRenderer.MeasureText(status.Text,status.Font,Size.Empty,TextFormatFlags.NoPadding).Width<=status.Width,
+                    "Maximum target fits status row " + size + " DPI " + dpi);
                 using (var bitmap = new Bitmap(form.Width,form.Height))
                 {
                     form.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));
-                    bitmap.Save(Path.Combine(root,"layout-"+size.Width+"-"+dpi+".png"));
+                    bitmap.Save(Path.Combine(root,"layout-long-"+size.Width+"x"+size.Height+"-"+dpi+".png"));
                 }
             }
             using (var form = new ClockForm(new StateStore(Path.Combine(root,"native-integration"))))
@@ -365,6 +420,14 @@ namespace DualClock
                     "Reopened UI automatically resumes saved rest side without extra switch");
                 form.Close();
             }
+        }
+
+        private static void SetLongSessionPreview(ClockForm form)
+        {
+            var state=((ClockEngine)typeof(ClockForm).GetField("engine",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(form)).State;
+            state.StudyTicks=TimeSpan.FromHours(125).Ticks+TimeSpan.FromSeconds(3).Ticks;
+            state.GoalTicks=ClockEngine.MaximumGoalTicks;
+            typeof(ClockForm).GetMethod("UpdateDisplay",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(form,null);
         }
 
         private static void GoalLayoutTests(string root)
